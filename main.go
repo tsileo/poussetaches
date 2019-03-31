@@ -274,7 +274,6 @@ func main() {
 	}()
 
 	log.Println("poussetaches starting...")
-	newTask("http://requestbin.fullcontact.com/11b4bz91", []byte("tom"), 200)
 	stop := make(chan struct{}, 1)
 	go worker(stop)
 
