@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
+	"math"
+	mrand "math/rand"
 	"net/http"
 	"os"
 	"os/signal"
@@ -18,7 +20,19 @@ import (
 )
 
 var basePath = "poussetaches_data"
-var maxRetries = 50
+var maxRetries = 12
+var retries = []int{
+	1, 4, 16, 64, 256, 1024, 4096, 16384, 65536, 262144, 1048576, 4194304,
+}
+
+func addJitter(i int) int {
+	// add +/- 30% randomly
+	jitter := float64(mrand.Int63n(30)) / 100
+	if mrand.Int63n(1) == 0 {
+		return int(math.Round((1.0 - jitter) * float64(i)))
+	}
+	return int(math.Round((1.0 + jitter) * float64(i)))
+}
 
 var (
 	client = &http.Client{}
@@ -203,8 +217,8 @@ func dumpTask(t *task, where string) error {
 func failure(t *task, status int, serr []byte) error {
 	t.LastErrorStatusCode = status
 	t.LastErrorBody = serr
-	if t.Tries < maxRetries {
-		t.NextRun = time.Now().Add(30 * time.Second).UnixNano()
+	if t.Tries+1 < maxRetries {
+		t.NextRun = time.Now().Add(time.Duration(addJitter(retries[t.Tries-1])) * time.Second).UnixNano()
 		if err := dumpTask(t, "waiting"); err != nil {
 			return err
 		}
