@@ -19,12 +19,24 @@ import (
 	"time"
 )
 
-var basePath = "poussetaches_data"
-var maxRetries = 12
+var (
+	authKey  = os.Getenv("POUSSETACHES_AUTH_KEY")
+	basePath = "poussetaches_data"
+	client   = &http.Client{}
+	wg       = sync.WaitGroup{}
+	tasksMu  = sync.Mutex{}
+	tasks    = []*task{}
+)
+
+const (
+	maxRetries = 12
+)
+
 var retries = []int{
 	1, 4, 16, 64, 256, 1024, 4096, 16384, 65536, 262144, 1048576, 4194304,
 }
 
+// "randomize" the retries delay
 func addJitter(i int) int {
 	// add +/- 30% randomly
 	jitter := float64(mrand.Int63n(30)) / 100
@@ -33,13 +45,6 @@ func addJitter(i int) int {
 	}
 	return int(math.Round((1.0 + jitter) * float64(i)))
 }
-
-var (
-	client = &http.Client{}
-	wg     = sync.WaitGroup{}
-)
-
-var authKey = os.Getenv("POUSSETACHES_AUTH_KEY")
 
 // Generate a new random ID (hex-encoded)
 func newID(n int) string {
@@ -113,9 +118,6 @@ func (t *task) execute() error {
 
 	return failure(t, resp.StatusCode, body)
 }
-
-var tasksMu = sync.Mutex{}
-var tasks = []*task{}
 
 func appendTask(t *task) {
 	tasksMu.Lock()
@@ -282,6 +284,26 @@ func main() {
 			w.Header().Set("Poussetaches-Task-ID", t.ID)
 			w.WriteHeader(http.StatusCreated)
 		})
+		for _, where := range []string{"dead", "waiting", "success"} {
+			http.HandleFunc("/"+where, func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != "GET" {
+					w.WriteHeader(http.StatusMethodNotAllowed)
+					return
+				}
+				tasks, err := loadDir(where)
+				if err != nil {
+					panic(err)
+				}
+
+				sort.Slice(tasks, func(i, j int) bool { return tasks[i].NextRun < tasks[j].NextRun })
+				w.Header().Set("Content-Type", "application/json")
+				if err := json.NewEncoder(w).Encode(&map[string]interface{}{
+					"tasks": tasks,
+				}); err != nil {
+					panic(err)
+				}
+			})
+		}
 
 		log.Println("Start HTTP API at :7991")
 		http.ListenAndServe(":7991", nil)
