@@ -71,6 +71,7 @@ type task struct {
 	NextRun int64 `json:"next_run"`
 	Tries   int   `json:"tries"`
 
+	LastRun             int64  `json:"last_run"`
 	LastErrorBody       []byte `json:"last_error_body"`
 	LastErrorStatusCode int    `json:"last_error_status_code"`
 }
@@ -243,6 +244,7 @@ L:
 			t := getNextTask()
 			start := time.Now()
 			if t != nil {
+				t.LastRun = start.UnixNano()
 				if err := t.execute(); err != nil {
 					// TODO see what happen to the task in this case
 					log.Printf("failed to execute task: %+v: %v\n", t, err)
