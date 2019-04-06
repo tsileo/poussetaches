@@ -26,6 +26,7 @@ var (
 	wg       = sync.WaitGroup{}
 	tasksMu  = sync.Mutex{}
 	tasks    = []*task{}
+	paused   bool
 )
 
 const (
@@ -131,6 +132,9 @@ func getNextTask() *task {
 	tasksMu.Lock()
 	defer tasksMu.Unlock()
 	if len(tasks) == 0 {
+		return nil
+	}
+	if paused {
 		return nil
 	}
 	task := tasks[0]
@@ -270,6 +274,18 @@ func main() {
 
 	go func() {
 		http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == "GET" {
+				tasksMu.Lock()
+				defer tasksMu.Unlock()
+				w.Header().Set("Content-Type", "application/json")
+				if err := json.NewEncoder(w).Encode(&map[string]interface{}{
+					"paused": paused,
+				}); err != nil {
+					panic(err)
+				}
+				return
+			}
+
 			if r.Method != "POST" {
 				w.WriteHeader(http.StatusMethodNotAllowed)
 				return
@@ -286,6 +302,25 @@ func main() {
 			w.Header().Set("Poussetaches-Task-ID", t.ID)
 			w.WriteHeader(http.StatusCreated)
 		})
+		http.HandleFunc("/pause", func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != "POST" {
+				w.WriteHeader(http.StatusMethodNotAllowed)
+				return
+			}
+			tasksMu.Lock()
+			defer tasksMu.Unlock()
+			paused = true
+		})
+		http.HandleFunc("/resume", func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != "POST" {
+				w.WriteHeader(http.StatusMethodNotAllowed)
+				return
+			}
+			tasksMu.Lock()
+			defer tasksMu.Unlock()
+			paused = false
+		})
+
 		for _, where := range []string{"dead", "waiting", "success"} {
 			http.HandleFunc("/"+where, func(w http.ResponseWriter, r *http.Request) {
 				if r.Method != "GET" {
