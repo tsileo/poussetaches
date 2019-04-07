@@ -17,6 +17,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"golang.org/x/time/rate"
 )
 
 var (
@@ -27,6 +29,7 @@ var (
 	tasksMu  = sync.Mutex{}
 	tasks    = []*task{}
 	paused   bool
+	limiter  *rate.Limiter
 )
 
 const (
@@ -248,14 +251,23 @@ L:
 			t := getNextTask()
 			start := time.Now()
 			if t != nil {
+				r := limiter.Reserve()
+				if !r.OK() {
+					log.Println("Not allowed to act!")
+					time.Sleep(200 * time.Millisecond)
+				}
+				log.Printf("worker sleeping for %v\n", r.Delay())
+				time.Sleep(r.Delay())
+
 				t.LastRun = start.UnixNano()
 				if err := t.execute(); err != nil {
 					// TODO see what happen to the task in this case
 					log.Printf("failed to execute task: %+v: %v\n", t, err)
 				}
 				log.Printf("Task done: %+v in %v\n", t, time.Since(start))
+			} else {
+				time.Sleep(200 * time.Millisecond)
 			}
-			time.Sleep(200 * time.Millisecond)
 			continue L
 		}
 	}
@@ -348,6 +360,7 @@ func main() {
 	}()
 
 	log.Println("poussetaches starting...")
+	limiter = rate.NewLimiter(rate.Limit(5), 10)
 	stop := make(chan struct{}, 1)
 	go worker(stop)
 
