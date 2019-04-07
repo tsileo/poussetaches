@@ -320,26 +320,27 @@ func main() {
 			defer tasksMu.Unlock()
 			paused = false
 		})
-
 		for _, where := range []string{"dead", "waiting", "success"} {
-			http.HandleFunc("/"+where, func(w http.ResponseWriter, r *http.Request) {
-				if r.Method != "GET" {
-					w.WriteHeader(http.StatusMethodNotAllowed)
-					return
-				}
-				tasks, err := loadDir(where)
-				if err != nil {
-					panic(err)
-				}
+			func(where string) {
+				http.HandleFunc("/"+where, func(w http.ResponseWriter, r *http.Request) {
+					if r.Method != "GET" {
+						w.WriteHeader(http.StatusMethodNotAllowed)
+						return
+					}
+					tasks, err := loadDir(where)
+					if err != nil {
+						panic(err)
+					}
 
-				sort.Slice(tasks, func(i, j int) bool { return tasks[i].NextRun < tasks[j].NextRun })
-				w.Header().Set("Content-Type", "application/json")
-				if err := json.NewEncoder(w).Encode(&map[string]interface{}{
-					"tasks": tasks,
-				}); err != nil {
-					panic(err)
-				}
-			})
+					sort.Slice(tasks, func(i, j int) bool { return tasks[i].NextRun < tasks[j].NextRun })
+					w.Header().Set("Content-Type", "application/json")
+					if err := json.NewEncoder(w).Encode(&map[string]interface{}{
+						"tasks": tasks,
+					}); err != nil {
+						panic(err)
+					}
+				})
+			}(where)
 		}
 
 		log.Println("Start HTTP API at :7991")
