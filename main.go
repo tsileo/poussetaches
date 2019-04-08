@@ -217,7 +217,7 @@ func newTask(u string, p []byte, expected int, sched string) *task {
 		h.Write(p)
 		io.WriteString(h, sched)
 
-		schedKey := fmt.Sprintf("%x", sha1.Sum(nil))
+		schedKey := fmt.Sprintf("%x", h.Sum(nil))
 		log.Printf("sched key=%s\n", schedKey)
 
 		if _, ok := schedIdx[schedKey]; ok {
