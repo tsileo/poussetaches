@@ -3,8 +3,10 @@ package main
 import (
 	"bytes"
 	"crypto/rand"
+	"crypto/sha1"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"log"
 	"math"
@@ -18,6 +20,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/robfig/cron"
 	"golang.org/x/time/rate"
 )
 
@@ -30,9 +33,11 @@ var (
 	tasks    = []*task{}
 	paused   bool
 	limiter  *rate.Limiter
+	schedIdx = map[string]struct{}{}
 )
 
 const (
+	maxSuccess = 1000 // Only keep the last 1000 done/succeeded tasks
 	maxRetries = 12
 )
 
@@ -63,6 +68,7 @@ type newTaskInput struct {
 	URL      string `json:"url"`
 	Payload  []byte `json:"payload"`
 	Expected int    `json:"expected"`
+	Schedule string `json:"schedule"`
 }
 
 type task struct {
@@ -71,9 +77,11 @@ type task struct {
 	URL      string `json:"url"`
 	Payload  []byte `json:"payload"`
 	Expected int    `json:"expected"`
+	Schedule string `json:"schedule"`
 
-	NextRun int64 `json:"next_run"`
-	Tries   int   `json:"tries"`
+	NextScheduledRun int64 `json:"next_scheduled_run"`
+	NextRun          int64 `json:"next_run"`
+	Tries            int   `json:"tries"`
 
 	LastRun             int64  `json:"last_run"`
 	LastErrorBody       []byte `json:"last_error_body"`
@@ -118,7 +126,13 @@ func (t *task) execute() error {
 	}
 
 	if resp.StatusCode == t.Expected {
-		return success(t)
+		if err := success(t); err != nil {
+			return err
+		}
+		if t.Schedule != "" {
+			return reschedule(t)
+		}
+		return nil
 	}
 
 	return failure(t, resp.StatusCode, body)
@@ -149,11 +163,25 @@ func getNextTask() *task {
 }
 
 func loadTasks() error {
+	tasksMu.Lock()
+	tasks = []*task{}
+
 	waiting, err := loadDir("waiting")
 	if err != nil {
 		return err
 	}
+	tasksMu.Unlock()
+
 	for _, t := range waiting {
+		if t.Schedule != "" {
+			// Remove the scheduled task
+			log.Printf("dropping scheduled task %+v\n", t)
+			if err := unlinkTask(t, "waiting"); err != nil {
+				return err
+			}
+			delete(schedIdx, t.ID)
+			continue
+		}
 		appendTask(t)
 	}
 	return nil
@@ -180,21 +208,69 @@ func loadDir(where string) ([]*task, error) {
 	return tasks, nil
 }
 
-func newTask(u string, p []byte, expected int) *task {
-	// TODO: dump to disk
+func newTask(u string, p []byte, expected int, sched string) *task {
+	nextRun := time.Now()
+	tid := newID(16)
+	if sched != "" {
+		h := sha1.New()
+		io.WriteString(h, u)
+		h.Write(p)
+		io.WriteString(h, sched)
+
+		schedKey := fmt.Sprintf("%x", sha1.Sum(nil))
+		log.Printf("sched key=%s\n", schedKey)
+
+		if _, ok := schedIdx[schedKey]; ok {
+			return &task{ID: schedKey}
+		}
+
+		schedIdx[schedKey] = struct{}{}
+		tid = schedKey
+
+		// Setup the initial next run if this is a cron/scheduled task
+		schedule, err := cron.Parse(sched)
+		if err != nil {
+			panic(err)
+		}
+		nextRun = schedule.Next(nextRun)
+
+	}
 	t := &task{
-		ID:       newID(6),
-		URL:      u,
-		Payload:  p,
-		Expected: expected,
-		NextRun:  time.Now().UnixNano(),
+		ID:               tid,
+		URL:              u,
+		Payload:          p,
+		Expected:         expected,
+		Schedule:         sched,
+		NextRun:          nextRun.UnixNano(),
+		NextScheduledRun: nextRun.UnixNano(),
 	}
 	if t.Expected == 0 {
 		t.Expected = 200
 	}
-	dumpTask(t, "waiting")
+	if err := dumpTask(t, "waiting"); err != nil {
+		panic(err)
+	}
 	appendTask(t)
 	return t
+}
+
+func reschedule(t *task) error {
+	lastRun := time.Unix(0, t.NextScheduledRun)
+	// Setup the initial next run if this is a cron/scheduled task
+	schedule, err := cron.Parse(t.Schedule)
+	if err != nil {
+		return err
+	}
+	t.NextScheduledRun = schedule.Next(lastRun).UnixNano()
+	t.NextRun = t.NextScheduledRun
+	t.Tries = 0
+	t.LastErrorBody = nil
+	t.LastErrorStatusCode = 0
+	if err := dumpTask(t, "waiting"); err != nil {
+		panic(err)
+	}
+	appendTask(t)
+	return nil
 }
 
 func success(t *task) error {
@@ -274,11 +350,32 @@ L:
 	fmt.Printf("worker stopped\n")
 }
 
+func removeOldSuccess() error {
+	success, err := loadDir("success")
+	if err != nil {
+		return err
+	}
+	if len(success) < maxSuccess {
+		return nil
+	}
+	// Sort by last run desc
+	sort.Slice(success, func(i, j int) bool { return success[i].LastRun > success[j].LastRun })
+	for _, t := range success[maxSuccess:] {
+		if err := unlinkTask(t, "success"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func main() {
 	for _, where := range []string{"dead", "waiting", "success"} {
 		if err := os.MkdirAll(filepath.Join(basePath, where), 0700); err != nil {
 			panic(err)
 		}
+	}
+	if err := removeOldSuccess(); err != nil {
+		panic(err)
 	}
 	if err := loadTasks(); err != nil {
 		panic(err)
@@ -309,11 +406,52 @@ func main() {
 			if err != nil {
 				panic(err)
 			}
+			if nt.Schedule != "" {
+				// Ensure the spec is valid
+				if _, err := cron.Parse(nt.Schedule); err != nil {
+					panic(err)
+				}
+			}
 			log.Printf("received new task %+v\n", nt)
-			t := newTask(nt.URL, nt.Payload, nt.Expected)
+			t := newTask(nt.URL, nt.Payload, nt.Expected, nt.Schedule)
 			w.Header().Set("Poussetaches-Task-ID", t.ID)
 			w.WriteHeader(http.StatusCreated)
 		})
+		http.HandleFunc("/cron", func(w http.ResponseWriter, r *http.Request) {
+			switch r.Method {
+			case "GET":
+				tasksMu.Lock()
+				defer tasksMu.Unlock()
+				tasks, err := loadDir("waiting")
+				if err != nil {
+					panic(err)
+				}
+				cronTasks := []*task{}
+				for _, t := range tasks {
+					if t.Schedule == "" {
+						continue
+					}
+					cronTasks = append(cronTasks, t)
+				}
+
+				sort.Slice(cronTasks, func(i, j int) bool { return cronTasks[i].NextRun < cronTasks[j].NextRun })
+				w.Header().Set("Content-Type", "application/json")
+				if err := json.NewEncoder(w).Encode(&map[string]interface{}{
+					"tasks": cronTasks,
+				}); err != nil {
+					panic(err)
+				}
+
+			case "DELETE":
+				if err := loadTasks(); err != nil {
+					panic(err)
+
+				}
+			default:
+				w.WriteHeader(http.StatusMethodNotAllowed)
+			}
+		})
+
 		http.HandleFunc("/pause", func(w http.ResponseWriter, r *http.Request) {
 			if r.Method != "POST" {
 				w.WriteHeader(http.StatusMethodNotAllowed)
@@ -339,6 +477,8 @@ func main() {
 						w.WriteHeader(http.StatusMethodNotAllowed)
 						return
 					}
+					tasksMu.Lock()
+					defer tasksMu.Unlock()
 					tasks, err := loadDir(where)
 					if err != nil {
 						panic(err)
@@ -360,17 +500,25 @@ func main() {
 	}()
 
 	log.Println("poussetaches starting...")
-	limiter = rate.NewLimiter(rate.Limit(5), 10)
-	stop := make(chan struct{}, 1)
-	go worker(stop)
 
+	// 3 reqs/second with a burst of 5
+	limiter = rate.NewLimiter(rate.Limit(3), 5)
+	workers := 2
+	stop := make(chan struct{}, workers)
+	for i := 0; i < workers; i++ {
+		go worker(stop)
+	}
+
+	// Wait until the server shut down
 	cs := make(chan os.Signal, 1)
 	signal.Notify(cs, os.Interrupt,
 		syscall.SIGINT,
 		syscall.SIGTERM,
 		syscall.SIGQUIT)
 	<-cs
-	stop <- struct{}{}
+	for i := 0; i < workers; i++ {
+		stop <- struct{}{}
+	}
 	wg.Wait()
 	log.Println("Shutdown")
 }

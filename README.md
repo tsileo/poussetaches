@@ -7,5 +7,4 @@ The app posts base64-encoded payload to `poussetaches` and specify the endpoint 
 
 It works a bit like GCP Cloud Tasks/PubSub in push mode.
 
-This is a work-in-progress and I would like to eventually rewrite the project in Rust.
 It's currently used by [microblog.pub](https://github.com/tsileo/microblog.pub).
