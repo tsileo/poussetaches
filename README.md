@@ -14,8 +14,8 @@ It's currently used by [microblog.pub](https://github.com/tsileo/microblog.pub) 
 
  - Designed as a "sidecar" process (meaning it should have the same lifecycle as the calling app)
  - Lightweight: a single binary with no dependencies
- - Tasks are kept in-memory and dumpted to the filesystem to be able to reste from crashes
- - Dead-letter queue for analysing failed tasks
+ - Tasks are kept in-memory and dumped to the filesystem to be able to restor from crashes
+ - Dead-letter queue for analyzing failed tasks
  - Simple HTTP JSON API for registering tasks and analyzing succeeded, in-progress and dead tasks
  - Scheduled/cron tasks support
 
@@ -30,21 +30,21 @@ This key will be used by your app to ensure that only `poussetaches` is "executi
 @app.route("task/my_task", methods=["POST"])
 def task_my_task():
     # Ensure poussetaches is the author of the request
-	if req.headers.get("Poussetaches-Auth-Key") != POUSSETACHES_AUTH_KEY:
-		raise ValueError("Bad auth key")
+    if req.headers.get("Poussetaches-Auth-Key") != POUSSETACHES_AUTH_KEY:
+        raise ValueError("Bad auth key")
 
-	# Parse the "envelope" which contains metadata and the payload
-	envelope = json.loads(req.data)
-	print(req)
-	print(f"envelope={envelope!r}")
-	payload = json.loads(base64.b64decode(envelope["payload"]))
+    # Parse the "envelope" which contains metadata and the payload
+    envelope = json.loads(req.data)
+    print(req)
+    print(f"envelope={envelope!r}")
+    payload = json.loads(base64.b64decode(envelope["payload"]))
 
     app.logger.info(envelope["req_id"])
-	app.logger.info(envelope["tries"])
-	app.logger.info(payload)
+    app.logger.info(envelope["tries"])
+    app.logger.info(payload)
 
-	# Return a successfull status code to let pousssetaches knows the task is done
-	return ""
+    # Return a successfull status code to let pousssetaches knows the task is done
+    return ""
 ```
 
 ## API
