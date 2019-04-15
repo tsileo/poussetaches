@@ -210,7 +210,7 @@ func loadDir(where string) ([]*task, error) {
 }
 
 func newTask(u string, p []byte, expected int, sched string, mdelay int) *task {
-	nextRun := time.Now().Add(mdelay * time.Minute)
+	nextRun := time.Now().Add(time.Duration(mdelay) * time.Minute)
 	tid := newID(16)
 	if sched != "" {
 		h := sha1.New()
