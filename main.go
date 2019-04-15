@@ -68,7 +68,8 @@ type newTaskInput struct {
 	URL      string `json:"url"`
 	Payload  []byte `json:"payload"`
 	Expected int    `json:"expected"`
-	Schedule string `json:"schedule"`
+	Schedule string `json:"schedule",omitempty`
+	Delay    int    `json:"delay",omitempty`
 }
 
 type task struct {
@@ -208,8 +209,8 @@ func loadDir(where string) ([]*task, error) {
 	return tasks, nil
 }
 
-func newTask(u string, p []byte, expected int, sched string) *task {
-	nextRun := time.Now()
+func newTask(u string, p []byte, expected int, sched string, mdelay int) *task {
+	nextRun := time.Now().Add(mdelay * time.Minute)
 	tid := newID(16)
 	if sched != "" {
 		h := sha1.New()
@@ -413,7 +414,7 @@ func main() {
 				}
 			}
 			log.Printf("received new task %+v\n", nt)
-			t := newTask(nt.URL, nt.Payload, nt.Expected, nt.Schedule)
+			t := newTask(nt.URL, nt.Payload, nt.Expected, nt.Schedule, nt.Delay)
 			w.Header().Set("Poussetaches-Task-ID", t.ID)
 			w.WriteHeader(http.StatusCreated)
 		})
