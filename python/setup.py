@@ -17,7 +17,7 @@ URL = "https://github.com/tsileo/poussetaches"
 EMAIL = "t@a4.io"
 AUTHOR = "Thomas Sileo"
 REQUIRES_PYTHON = ">=3.7.0"
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 
 
 REQUIRED = [

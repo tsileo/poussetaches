@@ -95,7 +95,17 @@ class PousseTaches:
         else:
             del t["last_run"]
 
-    def _get(self, where: str) -> List[GetTask]:
+    def _post(self, action: str) -> None:
+        resp = requests.post(self.api_url + f"/{action}")
+        resp.raise_for_status()
+
+    def pause(self) -> None:
+        self._post("pause")
+
+    def resume(self) -> None:
+        self._post("resume")
+
+    def _get_tasks(self, where: str) -> List[GetTask]:
         out = []
 
         resp = requests.get(self.api_url + f"/{where}")
@@ -120,13 +130,13 @@ class PousseTaches:
         return out
 
     def get_cron(self) -> List[GetTask]:
-        return self._get("cron")
+        return self._get_tasks("cron")
 
     def get_success(self) -> List[GetTask]:
-        return self._get("success")
+        return self._get_tasks("success")
 
     def get_waiting(self) -> List[GetTask]:
-        return self._get("waiting")
+        return self._get_tasks("waiting")
 
     def get_dead(self) -> List[GetTask]:
-        return self._get("dead")
+        return self._get_tasks("dead")

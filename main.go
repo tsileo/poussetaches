@@ -31,7 +31,8 @@ var (
 	wg       = sync.WaitGroup{}
 	tasksMu  = sync.Mutex{}
 	tasks    = []*task{}
-	paused   bool
+	paused   = true
+	inFlight = 0
 	limiter  *rate.Limiter
 	schedIdx = map[string]struct{}{}
 )
@@ -68,8 +69,8 @@ type newTaskInput struct {
 	URL      string `json:"url"`
 	Payload  []byte `json:"payload"`
 	Expected int    `json:"expected"`
-	Schedule string `json:"schedule",omitempty`
-	Delay    int    `json:"delay",omitempty`
+	Schedule string `json:"schedule,omitempty"`
+	Delay    int    `json:"delay,omitempty"`
 }
 
 type task struct {
@@ -96,6 +97,14 @@ type taskPayload struct {
 }
 
 func (t *task) execute() error {
+	tasksMu.Lock()
+	inFlight++
+	tasksMu.Unlock()
+	defer func() {
+		tasksMu.Lock()
+		inFlight--
+		tasksMu.Unlock()
+	}()
 	t.Tries++
 	reqID := newID(6)
 	tp := &taskPayload{
@@ -389,7 +398,8 @@ func main() {
 				defer tasksMu.Unlock()
 				w.Header().Set("Content-Type", "application/json")
 				if err := json.NewEncoder(w).Encode(&map[string]interface{}{
-					"paused": paused,
+					"paused":    paused,
+					"in_flight": inFlight,
 				}); err != nil {
 					panic(err)
 				}
@@ -500,7 +510,7 @@ func main() {
 		http.ListenAndServe(":7991", nil)
 	}()
 
-	log.Println("poussetaches starting...")
+	log.Println("poussetaches starting in...")
 
 	// 3 reqs/second with a burst of 5
 	limiter = rate.NewLimiter(rate.Limit(3), 5)
